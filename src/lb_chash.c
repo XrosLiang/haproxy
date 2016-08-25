@@ -27,6 +27,7 @@
 
 #include <proto/backend.h>
 #include <proto/queue.h>
+#include <proto/log.h>
 
 /* Return next tree node after <node> which must still be in the tree, or be
  * NULL. Lookup wraps around the end to the beginning. If the next node is the
@@ -241,19 +242,51 @@ static void chash_update_server_weight(struct server *srv)
 	srv_lb_commit_status(srv);
 }
 
-/*
- * This function returns the running server from the CHASH tree, which is at
- * the closest distance from the value of <hash>. Doing so ensures that even
- * with a well imbalanced hash, if some servers are close to each other, they
- * will still both receive traffic. If any server is found, it will be returned.
- * If no valid server is found, NULL is returned.
- */
+void chash_update_server_capacities(struct proxy *p) {
+	struct eb_root *root;
+	struct eb32_node *node;
+	struct server *s;
+	unsigned i, num_servers, num_conns, target_capacity, small_size, num_big;
+
+	if (p->srv_act)
+		root = &p->lbprm.chash.act;
+	else if (p->srv_bck)
+		root = &p->lbprm.chash.bck;
+	else
+		return;
+
+	num_conns = 0;
+	num_servers = 0;
+  for (s = p->srv; s; s = s->next) {
+    if (s->lb_tree != root)
+      continue;
+		num_conns += s->served + s->nbpend;
+//		send_log(p, LOG_WARNING, "server %s: %d + %d = %d connections\n", s->id, s->served, s->nbpend, s->served + s->nbpend);
+		num_servers ++;
+    s->chf_cap = 0;
+	}
+
+	target_capacity = num_conns + num_conns / 4; /* epsilon = 0.25 */
+	small_size = target_capacity / num_servers;
+	num_big = target_capacity % num_servers;
+
+//	send_log(p, LOG_WARNING, "target capacity: %d (%d x %d + %d x 1)\n", target_capacity, small_size, num_servers, num_big);
+
+	for (node = eb32_first(root), i = 0; node; node = eb32_next(node), i++) {
+		s = eb32_entry(node, struct tree_occ, node)->server;
+    if (s->chf_cap)
+      continue;
+		s->chf_cap = small_size + ((i < num_big) ? 1 : 0);
+		if (s->chf_cap == 0)
+			s->chf_cap = 1;
+	}
+}
+
 struct server *chash_get_server_hash(struct proxy *p, unsigned int hash)
 {
-	struct eb32_node *next, *prev;
-	struct server *nsrv, *psrv;
+	struct eb32_node *node;
+	struct server *s;
 	struct eb_root *root;
-	unsigned int dn, dp;
 
 	if (p->srv_act)
 		root = &p->lbprm.chash.act;
@@ -264,30 +297,29 @@ struct server *chash_get_server_hash(struct proxy *p, unsigned int hash)
 	else
 		return NULL;
 
-	/* find the node after and the node before */
-	next = eb32_lookup_ge(root, hash);
-	if (!next)
-		next = eb32_first(root);
-	if (!next)
+	/* find the next node */
+	node = eb32_lookup_ge(root, hash);
+	if (!node)
+		node = eb32_first(root);
+	if (!node)
 		return NULL; /* tree is empty */
 
-	prev = eb32_prev(next);
-	if (!prev)
-		prev = eb32_last(root);
+	chash_update_server_capacities(p);
 
-	nsrv = eb32_entry(next, struct tree_occ, node)->server;
-	psrv = eb32_entry(prev, struct tree_occ, node)->server;
-	if (nsrv == psrv)
-		return nsrv;
+	s = eb32_entry(node, struct tree_occ, node)->server;
 
-	/* OK we're located between two distinct servers, let's
-	 * compare distances between hash and the two servers
-	 * and select the closest server.
-	 */
-	dp = hash - prev->key;
-	dn = next->key - hash;
+//	send_log(p, LOG_WARNING, "server %s: %d conns, %d cap\n", s->id, s->served + s->nbpend, s->chf_cap);
 
-	return (dp <= dn) ? psrv : nsrv;
+	while (s->served + s->nbpend > s->chf_cap) {
+		send_log(p, LOG_WARNING, "server %s: %d conns > %d cap\n", s->id, s->served + s->nbpend, s->chf_cap);
+		node = eb32_next(node);
+		if (!node)
+			node = eb32_first(root);
+		s = eb32_entry(node, struct tree_occ, node)->server;
+//		send_log(p, LOG_WARNING, "server %s: %d conns, %d cap\n", s->id, s->served + s->nbpend, s->chf_cap);
+	}
+
+	return s;
 }
 
 /* Return next server from the CHASH tree in backend <p>. If the tree is empty,

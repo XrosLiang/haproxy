@@ -201,6 +201,7 @@ struct server {
 	unsigned prev_eweight;			/* eweight before last change */
 	unsigned rweight;			/* remainer of weight in the current LB tree */
 	unsigned npos, lpos;			/* next and last positions in the LB tree */
+	unsigned chf_cap;
 	struct eb32_node lb_node;               /* node used for tree-based load balancing */
 	struct eb_root *lb_tree;                /* we want to know in what tree the server is */
 	struct server *next_full;               /* next server in the temporary full list */
