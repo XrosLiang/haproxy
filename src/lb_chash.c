@@ -255,7 +255,7 @@ void chash_update_server_capacities(struct proxy *p) {
 	else
 		return;
 
-	num_conns = 0;
+	num_conns = 1; // +1 for the connection we're making now
 	num_servers = 0;
   for (s = p->srv; s; s = s->next) {
     if (s->lb_tree != root)
@@ -310,8 +310,8 @@ struct server *chash_get_server_hash(struct proxy *p, unsigned int hash)
 
 //	send_log(p, LOG_WARNING, "server %s: %d conns, %d cap\n", s->id, s->served + s->nbpend, s->chf_cap);
 
-	while (s->served + s->nbpend > s->chf_cap) {
-		send_log(p, LOG_WARNING, "server %s: %d conns > %d cap\n", s->id, s->served + s->nbpend, s->chf_cap);
+	while (s->served + s->nbpend >= s->chf_cap) {
+		send_log(p, LOG_WARNING, "server %s: %d conns >= %d cap\n", s->id, s->served + s->nbpend, s->chf_cap);
 		node = eb32_next(node);
 		if (!node)
 			node = eb32_first(root);
