@@ -284,7 +284,7 @@ void chash_update_server_capacities(struct proxy *p) {
 
 struct server *chash_get_server_hash(struct proxy *p, unsigned int hash)
 {
-	struct eb32_node *node;
+	struct eb32_node *node, *stop;
 	struct server *s;
 	struct eb_root *root;
 
@@ -298,7 +298,7 @@ struct server *chash_get_server_hash(struct proxy *p, unsigned int hash)
 		return NULL;
 
 	/* find the next node */
-	node = eb32_lookup_ge(root, hash);
+	stop = node = eb32_lookup_ge(root, hash);
 	if (!node)
 		node = eb32_first(root);
 	if (!node)
@@ -311,12 +311,14 @@ struct server *chash_get_server_hash(struct proxy *p, unsigned int hash)
 //	send_log(p, LOG_WARNING, "server %s: %d conns, %d cap\n", s->id, s->served + s->nbpend, s->chf_cap);
 
 	while (s->served + s->nbpend >= s->chf_cap) {
-		send_log(p, LOG_WARNING, "server %s: %d conns >= %d cap\n", s->id, s->served + s->nbpend, s->chf_cap);
 		node = eb32_next(node);
 		if (!node)
 			node = eb32_first(root);
 		s = eb32_entry(node, struct tree_occ, node)->server;
-//		send_log(p, LOG_WARNING, "server %s: %d conns, %d cap\n", s->id, s->served + s->nbpend, s->chf_cap);
+		if (node == stop) {
+			send_log(p, LOG_ERR, "chash_get_server_hash went all the way around");
+			break;
+		}
 	}
 
 	return s;
